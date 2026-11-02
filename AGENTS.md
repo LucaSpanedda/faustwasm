@@ -54,6 +54,15 @@ npm run measure    # sample-accuracy measurement in headless Chromium
 - `test/unit/paths-agree.test.mjs` renders the same DSP down two routes and requires them to match sample for sample: offline against AudioWorklet, and the mono DSP against one polyphonic voice. It tests the glue rather than the wasm, and needs no regenerating when libfaust moves, since both sides move together. Note what it cannot catch: a change in code *shared* by both routes shifts them equally and stays green, which is what the direct unit tests above are for.
 - The mono/poly behavior is expected to stay bit-identical to the published package unless the change is deliberate — `npm run measure` and the unit tests are the safety net.
 
+## Version
+
+- The version is only in `package.json` and in the two root entries of `package-lock.json`: nothing in `src/`, `scripts/`, `assets/` or `dist/` carries it. Change both files with `npm version <x.y.z> --no-git-tag-version`, which neither commits nor tags.
+- Agree on the number with the maintainer before changing it. The package is still in 0.x, so the middle number marks what a major would:
+  - **minor** (`0.19.6` → `0.20.0`) for a new feature or an addition to the public API, such as a new method on a node interface, and when `libfaust-wasm/` moves to a new Faust minor (Faust 2.90.0 gave `0.19.0`);
+  - **patch** (`0.19.6` → `0.19.7`) for fixes, documentation and tests, and for a `libfaust-wasm/` update within the same Faust minor.
+- The version commit is the last one of the series it releases, on its own, with the message `Set version to x.y.z.` When it also brings a new `libfaust-wasm/`, the message says so first: `Updated with 2.90.0. Set version to 0.19.0.` If more commits land before it is pushed, move it back to the top (cherry-pick or rebase while it is local); never rewrite a pushed one.
+- Rebuild after the change (`npm run build`), then run `npm test`: `npm publish` ships `dist/` as it stands on disk, without rebuilding. Do not tag, push or publish unless asked.
+
 ## Related repositories
 
 The C++ Faust compiler lives in [grame-cncm/faust](https://github.com/grame-cncm/faust); fixes to shared logic (e.g. `architecture/faust/dsp/poly-dsp.h` voice allocation) usually need porting between the two, in both directions. Check whether a change here has a C++ counterpart, and say so in the commit message.
