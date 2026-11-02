@@ -63,6 +63,13 @@ npm run measure    # sample-accuracy measurement in headless Chromium
 - The version commit is the last one of the series it releases, on its own, with the message `Set version to x.y.z.` When it also brings a new `libfaust-wasm/`, the message says so first: `Updated with 2.90.0. Set version to 0.19.0.` If more commits land before it is pushed, move it back to the top (cherry-pick or rebase while it is local); never rewrite a pushed one.
 - Rebuild after the change (`npm run build`), then run `npm test`: `npm publish` ships `dist/` as it stands on disk, without rebuilding. Do not tag, push or publish unless asked.
 
+## Dependencies
+
+- A version change does not call for `npm update`: `npm version` already keeps `package.json` and `package-lock.json` consistent, and the version commit should change nothing but the number, so that the difference between two releases is the code that was committed for them.
+- Apart from `@types/emscripten`, every dependency is a development tool (esbuild, TypeScript, dts-bundle-generator, eslint...). They are not installed by users, but they produce the `dist/` that is published: updating esbuild changes the shipped code. Update them on purpose, in their own commit before the version commit (as `[chore] update esbuild to v0.27` did), then `npm run build`, `npm run lint`, `npm run lint-tests` and `npm run test-all`. A transitive update that `npm install` slips into `package-lock.json` belongs there too, not in the version commit.
+- Before a release, `npm outdated` shows what has aged and `npm audit` the known vulnerabilities; decide from them whether an update commit is needed. `npm update` stays within the ranges of `package.json`: moving a tool to a new major (TypeScript, `@types/node`) is a migration of its own, with its own tests.
+- Build from the lockfile when reproducibility matters (`npm ci`, which installs exactly what `package-lock.json` pins), and commit `package-lock.json` with every change of `package.json` dependencies.
+
 ## Related repositories
 
 The C++ Faust compiler lives in [grame-cncm/faust](https://github.com/grame-cncm/faust); fixes to shared logic (e.g. `architecture/faust/dsp/poly-dsp.h` voice allocation) usually need porting between the two, in both directions. Check whether a change here has a C++ counterpart, and say so in the commit message.
