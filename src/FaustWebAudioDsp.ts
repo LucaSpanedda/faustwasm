@@ -29,6 +29,8 @@ export type PlotHandler = (
 ) => void;
 export type MetadataHandler = (key: string, value: string) => void;
 export type NonFiniteHandler = () => void;
+/** Receives the number of voices still sounding when it changes. */
+export type ActiveVoicesHandler = (count: number) => void;
 
 /**
  * A control write due at a known frame inside the next block.
@@ -828,6 +830,15 @@ export interface IFaustPolyWebAudioDsp extends IFaustBaseWebAudioDsp {
      * @param hard - whether to immediately stop notes or put them in release mode
      */
     allNotesOff(hard: boolean): void;
+
+    /**
+     * Return the number of voices still sounding: playing, in their release or
+     * in legato. A released voice counts until it has died away.
+     *
+     * An AudioWorklet node returns the count the audio thread last reported,
+     * at the end of the block in which it changed.
+     */
+    getNumActiveVoices(): number;
 }
 /** As `IFaustMonoWebAudioNode`, with the notes timestamped too. */
 export interface IFaustPolyWebAudioNode
@@ -2403,6 +2414,10 @@ export class FaustPolyWebAudioDsp
     /** Voices whose crossfade this block already rendered in full. */
     private fStolen: FaustWebAudioDspVoice[] = [];
 
+    /** The count last given to `fActiveVoicesHandler`. */
+    private fActiveVoices = 0;
+    private fActiveVoicesHandler: ActiveVoicesHandler | null = null;
+
     /**
      * Render one slice: every live voice into the sum, then the effect.
      *
@@ -2928,6 +2943,16 @@ export class FaustPolyWebAudioDsp
             }
         });
 
+        // Report the number of sounding voices, once the freed ones are known,
+        // only when it changed: at most two calls per note
+        if (this.fActiveVoicesHandler) {
+            const active = this.getNumActiveVoices();
+            if (active !== this.fActiveVoices) {
+                this.fActiveVoices = active;
+                this.fActiveVoicesHandler(active);
+            }
+        }
+
         // Update bargraph
         this.updateOutputs();
 
@@ -3109,5 +3134,33 @@ export class FaustPolyWebAudioDsp
     allNotesOff(hard: boolean = true) {
         this.fCachedEvents.push({ type: 'ctrlChange', data: [0, 123, 0] });
         this.fVoiceTable.forEach((voice) => voice.keyOff(hard));
+    }
+
+    // Same count as dsp_voice_group::getNumActiveVoices() in the C++ poly-dsp.h.
+    // An indexed loop: called after every block when a handler is set, it must
+    // not allocate an iterator.
+    getNumActiveVoices() {
+        let count = 0;
+        for (let i = 0; i < this.fVoiceTable.length; i++) {
+            if (
+                this.fVoiceTable[i].fCurNote !==
+                FaustWebAudioDspVoice.kFreeVoice
+            )
+                count++;
+        }
+        return count;
+    }
+
+    /**
+     * Call `handler` with the number of sounding voices after each block in
+     * which it changed (see `getNumActiveVoices`). The AudioWorklet processor
+     * uses it to keep its node's count up to date.
+     */
+    setActiveVoicesHandler(handler: ActiveVoicesHandler | null) {
+        this.fActiveVoicesHandler = handler;
+        this.fActiveVoices = this.getNumActiveVoices();
+    }
+    getActiveVoicesHandler() {
+        return this.fActiveVoicesHandler;
     }
 }

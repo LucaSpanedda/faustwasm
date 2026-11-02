@@ -288,4 +288,8 @@ export class FaustPolyScriptProcessorNode
     allNotesOff(hard: boolean) {
         this.fDSPCode.allNotesOff(hard);
     }
+    // The DSP runs on this thread: the count is always current
+    getNumActiveVoices() {
+        return this.fDSPCode.getNumActiveVoices();
+    }
 }

@@ -301,6 +301,20 @@ process = os.osc(freq) * gain
 
 Here, `0.999` is the smoothing coefficient, and `32` is the number of samples before smoothing resumes after the gate rises. Later control changes during a held note are still smoothed.
 
+### Counting active voices
+
+Polyphonic nodes and offline processors have a `getNumActiveVoices()` method, which returns the number of voices still sounding: playing, in their release, or in legato. A released voice counts until it has died away, which makes it suitable for a voice meter:
+
+```JavaScript
+const meter = () => {
+    voicesLabel.textContent = `${node.getNumActiveVoices()} voices`;
+    requestAnimationFrame(meter);
+};
+meter();
+```
+
+With an AudioWorklet node, the voices live on the audio thread: the processor reports their number at the end of each block in which it changed, and the node returns the latest report. ScriptProcessor nodes and offline processors count them directly. It matches `getNumActiveVoices()` of the C++ polyphonic architecture (`faust/dsp/poly-dsp.h`).
+
 ### Sample-accurate scheduling
 
 Every control method on a Faust AudioWorklet node takes an optional `time` argument as its last parameter: `setParamValue(path, value, time)`, `keyOn(channel, pitch, velocity, time)`, `keyOff(channel, pitch, velocity, time)`, `midiMessage(data, time)`, `ctrlChange(channel, ctrl, value, time)`, `pitchWheel(channel, wheel, time)`. `time` is in AudioContext seconds — the same clock as `audioCtx.currentTime` and `AudioParam.setValueAtTime` — and the action lands on the exact sample that instant names, inside the audio block that contains it. The unit is the second (a JavaScript double), the granularity is the sample: the processor converts it with `Math.round(time * sampleRate)` to a frame on the audio clock, so an instant is honoured to the nearest sample (about 21 µs at 48 kHz):

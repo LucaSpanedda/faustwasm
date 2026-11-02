@@ -790,6 +790,11 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
             this.fDSPCode.setInputParamHandler((path, value) =>
                 this.port.postMessage({ path, value, type: 'in-param' })
             );
+            // The node reads the count from these messages, sent only when it
+            // changes, at the end of the block
+            this.fDSPCode.setActiveVoicesHandler((count) =>
+                this.port.postMessage({ value: count, type: 'active-voices' })
+            );
 
             this.fDSPCode.start();
         }

@@ -310,4 +310,47 @@ for (const [kind, sp] of KINDS) {
         assertFinite(rendered, kind);
         assertAudible(rendered, `${kind} playing a note`);
     });
+
+    test(`${kind} counts the voices still sounding`, async () => {
+        const { generator, voiceFactory, mixerModule } = await polyGenerator(
+            'nodevoices',
+            INSTRUMENT
+        );
+        const context = audioContext();
+        const node = await generator.createNode(
+            context,
+            VOICES,
+            'nodevoices',
+            voiceFactory,
+            mixerModule,
+            generator.effectFactory,
+            sp,
+            BLOCK
+        );
+        assert.ok(node, 'createNode returned nothing');
+        // INSTRUMENT releases in 0.2 s: one second is enough for the voice to
+        // fall below the -90 dB at which it is freed.
+        const releaseFrames = BLOCK * Math.ceil(SAMPLE_RATE / BLOCK);
+
+        assert.equal(node.getNumActiveVoices(), 0, `${kind} before any note`);
+        node.keyOn(0, 60, 100);
+        node.keyOn(0, 64, 100);
+        renderNode(node, FRAMES);
+        assert.equal(node.getNumActiveVoices(), 2, `${kind} playing two notes`);
+
+        // A released voice keeps sounding, and counting, until it dies away
+        node.keyOff(0, 60, 0);
+        renderNode(node, BLOCK);
+        assert.equal(node.getNumActiveVoices(), 2, `${kind} releasing a note`);
+        renderNode(node, releaseFrames);
+        assert.equal(node.getNumActiveVoices(), 1, `${kind} after the release`);
+
+        node.allNotesOff(true);
+        renderNode(node, BLOCK);
+        assert.equal(
+            node.getNumActiveVoices(),
+            0,
+            `${kind} after all notes off`
+        );
+    });
 }

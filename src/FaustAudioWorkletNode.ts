@@ -459,10 +459,17 @@ export class FaustPolyAudioWorkletNode
     implements IFaustPolyWebAudioDsp
 {
     private fJSONEffect: FaustDspMeta | null;
+    /** The number of sounding voices, as last reported by the processor. */
+    private fNumActiveVoices = 0;
 
     onprocessorerror = (e: Event) => {
         // console.error("Error from " + this.fJSONDsp.name + " FaustPolyAudioWorkletNode");
         throw e;
+    };
+
+    private handleActiveVoices = (e: MessageEvent) => {
+        if (e.data.type === 'active-voices')
+            this.fNumActiveVoices = e.data.value;
     };
 
     constructor(
@@ -484,6 +491,8 @@ export class FaustPolyAudioWorkletNode
         if (this.fJSONEffect) {
             FaustBaseWebAudioDsp.parseUI(this.fJSONEffect.ui, this.fUICallback);
         }
+
+        this.port.addEventListener('message', this.handleActiveVoices);
     }
 
     // Public API
@@ -493,6 +502,12 @@ export class FaustPolyAudioWorkletNode
     allNotesOff(hard: boolean) {
         const e = { type: 'ctrlChange', data: [0, 123, 0] };
         this.port.postMessage(e);
+    }
+
+    // The DSP runs on the audio thread, which reports the count when it
+    // changes: this is its value at the end of the latest such block
+    getNumActiveVoices() {
+        return this.fNumActiveVoices;
     }
 
     getMeta() {

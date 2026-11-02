@@ -325,6 +325,10 @@ export class FaustPolyOfflineProcessor
     allNotesOff(hard: boolean) {
         this.fDSPCode.allNotesOff(hard);
     }
+    // The DSP renders on this thread: the count is always current
+    getNumActiveVoices() {
+        return this.fDSPCode.getNumActiveVoices();
+    }
 }
 
 export default FaustOfflineProcessor;
