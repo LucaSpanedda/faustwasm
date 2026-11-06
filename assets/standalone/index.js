@@ -29,6 +29,8 @@ const $selectAudioInput = document.getElementById("select-audio-input");
 /** @type {HTMLSelectElement} */
 const $selectMidiInput = document.getElementById("select-midi-input");
 /** @type {HTMLSelectElement} */
+const $selectMidiChannel = document.getElementById("select-midi-channel");
+/** @type {HTMLSelectElement} */
 const $buttonDsp = document.getElementById("button-dsp");
 /** @type {HTMLDivElement} */
 const $divFaustUI = document.getElementById("div-faust-ui");
@@ -89,6 +91,21 @@ let faustNode;
         // Keyboard to MIDI handling - create but don't start yet
         let keyboard2MIDI = createKey2MIDI((event) => faustNode.midiMessage(event));
         let isKeyboardActive = false;
+
+        // Received MIDI channel: the default comes from the DSP's
+        // [midichannel:N] option. The computer keyboard plays on it, so that
+        // it is still heard once a channel is chosen.
+        $selectMidiChannel.add(new Option("All", "0"));
+        for (let channel = 1; channel <= 16; channel++) {
+            $selectMidiChannel.add(new Option(String(channel), String(channel)));
+        }
+        const setMidiChannel = (channel) => {
+            faustNode.setMidiChannel(channel);
+            $selectMidiChannel.value = String(faustNode.getMidiChannel());
+            keyboard2MIDI.channel = faustNode.getMidiChannel() || 1;
+        };
+        setMidiChannel(faustNode.getMidiChannel());
+        $selectMidiChannel.onchange = () => setMidiChannel(Number($selectMidiChannel.value));
 
         const midiAccess = await navigator.requestMIDIAccess();
         /** @type {WebMidi.MIDIInput} */

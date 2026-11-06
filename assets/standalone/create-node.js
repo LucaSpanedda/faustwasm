@@ -239,10 +239,12 @@ class Key2Midi {
         z: "PREV", x: "NEXT", c: "VELDOWN", v: "VELUP"
     };
 
-    constructor({ keyMap = Key2Midi.KEY_MAP, offset = 60, velocity = 100, handler = console.log } = {}) {
+    constructor({ keyMap = Key2Midi.KEY_MAP, offset = 60, velocity = 100, channel = 1, handler = console.log } = {}) {
         this.keyMap = keyMap;
         this.offset = offset;
         this.velocity = velocity;
+        // MIDI channel the notes are sent on, 1..16
+        this.channel = channel;
         this.velMap = [20, 40, 60, 80, 100, 127];
         this.handler = handler;
         this.pressed = {};
@@ -264,12 +266,15 @@ class Key2Midi {
     onKeyDown(e) {
         const key = e.key.toLowerCase();
         if (this.pressed[key]) return;
-        this.pressed[key] = true;
+        // Keep the channel of the note on: its note off goes to the same one,
+        // even if the channel was changed while the key was held
+        const channel = (this.channel - 1) & 0xf;
+        this.pressed[key] = { channel };
 
         const val = this.keyMap[key];
         if (typeof val === "number") {
             const note = val + this.offset;
-            this.handler([0x90, note, this.velocity]);
+            this.handler([0x90 | channel, note, this.velocity]);
         } else if (val === "PREV") {
             this.offset -= 1;
         } else if (val === "NEXT") {
@@ -286,9 +291,9 @@ class Key2Midi {
     onKeyUp(e) {
         const key = e.key.toLowerCase();
         const val = this.keyMap[key];
-        if (typeof val === "number") {
+        if (typeof val === "number" && this.pressed[key]) {
             const note = val + this.offset;
-            this.handler([0x80, note, this.velocity]);
+            this.handler([0x80 | this.pressed[key].channel, note, this.velocity]);
         }
         delete this.pressed[key];
     }
@@ -298,10 +303,11 @@ class Key2Midi {
  * Creates a Key2Midi instance.
  * 
  * @param {function} handler - The function to handle MIDI messages.
+ * @param {number} [channel] - The MIDI channel the notes are sent on, 1..16.
  * @returns {Key2Midi} - The Key2Midi instance.
  */
-function createKey2MIDI(handler) {
-    return new Key2Midi({ handler: handler });
+function createKey2MIDI(handler, channel = 1) {
+    return new Key2Midi({ handler: handler, channel: channel });
 }
 
 // Export the functions

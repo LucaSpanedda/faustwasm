@@ -137,7 +137,9 @@ export class FaustPWA {
         // Import the create-node module
         const { createKey2MIDI } = await import("./create-node.js");
 
-        this.fKeyboard2MIDI = createKey2MIDI((event) => this.fFaustNode.midiMessage(event));
+        // Played on the received channel, so that it is heard once one is chosen
+        this.fKeyboard2MIDI = createKey2MIDI((event) => this.fFaustNode.midiMessage(event),
+            this.fFaustNode.getMidiChannel() || 1);
         this.fKeyboard2MIDI.start();
     }
 
@@ -330,6 +332,11 @@ export class FaustPWA {
 
             this.fFaustNode = result.faustNode;  // Assign to the global variable
             if (!this.fFaustNode) throw new Error("Faust DSP not compiled");
+
+            // '?midichannel=N' in the page URL overrides the DSP's
+            // [midichannel:N] option: receive only MIDI channel N (1..16, 0 for all)
+            const midiChannel = new URLSearchParams(window.location.search).get("midichannel");
+            if (midiChannel !== null) this.fFaustNode.setMidiChannel(Number(midiChannel));
 
             // Create the Faust UI
             this.fFaustUI = await createFaustUI(this.fOptions.uiContainer, this.fFaustNode);
