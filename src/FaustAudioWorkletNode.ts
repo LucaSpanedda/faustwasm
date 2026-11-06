@@ -27,6 +27,8 @@ export class FaustAudioWorkletNode<
 > extends (globalThis.AudioWorkletNode || null) {
     protected fJSONDsp: FaustDspMeta;
     protected fJSON: string;
+    /** Received MIDI channel, as last sent to the processor. */
+    protected fMidiChannel = 0;
     protected fInputsItems: string[];
     protected fOutputHandler: OutputParamHandler | null;
     protected fInputHandler: InputParamHandler | null;
@@ -63,6 +65,10 @@ export class FaustAudioWorkletNode<
 
         this.fJSONDsp = JSONObj;
         this.fJSON = factory.json;
+        // The processor's DSP reads the same metadata
+        this.fMidiChannel = FaustBaseWebAudioDsp.parseMidiChannel(
+            this.fJSONDsp.meta
+        );
         this.fOutputHandler = null;
         this.fInputHandler = null;
         this.fComputeHandler = null;
@@ -280,17 +286,21 @@ export class FaustAudioWorkletNode<
      * writes an `AudioParam`, and `setValueAtTime` throws on a negative time.
      */
     midiMessage(data: number[] | Uint8Array, time?: number): void {
-        const cmd = data[0] >> 4;
-        const channel = data[0] & 0xf;
-        const data1 = data[1];
-        const data2 = data[2];
-        if (cmd === 11) this.ctrlChange(channel, data1, data2, time);
-        else if (cmd === 14)
-            this.pitchWheel(channel, data2 * 128.0 + data1, time);
-        if (cmd === 8 || (cmd === 9 && data2 === 0))
-            this.keyOff(channel, data1, data2, time);
-        else if (cmd === 9) this.keyOn(channel, data1, data2, time);
-        else this.port.postMessage({ type: 'midi', data: data, time });
+        // Sent as bytes: the processor's DSP applies the received channel
+        // (see `setMidiChannel`) before decoding them
+        this.port.postMessage({ type: 'midi', data: data, time });
+    }
+
+    setMidiChannel(channel: number) {
+        this.fMidiChannel =
+            Number.isInteger(channel) && channel >= 0 && channel <= 16
+                ? channel
+                : 0;
+        this.port.postMessage({ type: 'midiChannel', data: this.fMidiChannel });
+    }
+
+    getMidiChannel() {
+        return this.fMidiChannel;
     }
 
     ctrlChange(channel: number, ctrl: number, value: number, time?: number) {
@@ -500,7 +510,8 @@ export class FaustPolyAudioWorkletNode
     // which the processor routes to the polyphonic DSP.
 
     allNotesOff(hard: boolean) {
-        const e = { type: 'ctrlChange', data: [0, 123, 0] };
+        // Its own message: a CC 123 would only end the voices of one channel
+        const e = { type: 'allNotesOff', data: hard };
         this.port.postMessage(e);
     }
 

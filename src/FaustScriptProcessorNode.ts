@@ -200,6 +200,13 @@ export class FaustScriptProcessorNode<
         this.fDSPCode.midiMessage(data);
     }
 
+    setMidiChannel(channel: number) {
+        this.fDSPCode.setMidiChannel(channel);
+    }
+    getMidiChannel() {
+        return this.fDSPCode.getMidiChannel();
+    }
+
     ctrlChange(chan: number, ctrl: number, value: number) {
         this.fDSPCode.ctrlChange(chan, ctrl, value);
     }

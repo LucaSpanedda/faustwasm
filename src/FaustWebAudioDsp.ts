@@ -614,14 +614,39 @@ export interface IFaustBaseWebAudioDsp {
     /**
      * Handle untyped MIDI messages.
      *
+     * Channel voice messages (notes, controllers, program change, pressure,
+     * pitch bend) on another channel than the one given to `setMidiChannel`
+     * are ignored.
+     *
      * @param data - and arry of MIDI bytes
      */
     midiMessage(data: number[] | Uint8Array): void;
 
     /**
+     * Receive only one MIDI channel in `midiMessage`.
+     *
+     * Real-time and SysEx messages are always received. The typed methods
+     * (`keyOn`, `keyOff`, `ctrlChange`, `pitchWheel`) are calls of the host,
+     * not MIDI input, and are not filtered: an on-screen keyboard keeps
+     * playing whatever channel it sends on.
+     *
+     * The default is the `declare options "[midichannel:N]";` (or
+     * `declare midichannel "N";`) metadata of the DSP, otherwise 0.
+     *
+     * @param channel - in 1..16, or 0 to receive all channels. Any other
+     * value means 0.
+     */
+    setMidiChannel(channel: number): void;
+
+    /**
+     * Return the received MIDI channel, in 1..16, or 0 for all channels.
+     */
+    getMidiChannel(): number;
+
+    /**
      * Handle MIDI ctrlChange messages.
      *
-     * @param channel - the MIDI channel (0..15, not used for now)
+     * @param channel - the MIDI channel (0..15)
      * @param ctrl - the MIDI controller number (0..127)
      * @param value - the MIDI controller value (0..127)
      */
@@ -630,7 +655,7 @@ export interface IFaustBaseWebAudioDsp {
     /**
      * Handle MIDI pitchWheel messages.
      *
-     * @param channel - the MIDI channel (0..15, not used for now)
+     * @param channel - the MIDI channel (0..15)
      * @param value - the MIDI controller value (0..16383)
      */
     pitchWheel(chan: number, value: number): void;
@@ -809,7 +834,7 @@ export interface IFaustPolyWebAudioDsp extends IFaustBaseWebAudioDsp {
     /**
      * Handle MIDI keyOn messages.
      *
-     * @param channel - the MIDI channel (0..15, not used for now)
+     * @param channel - the MIDI channel (0..15), kept by the voice the note starts
      * @param pitch - the MIDI pitch value (0..127)
      * @param velocity - the MIDI velocity value (0..127)
      */
@@ -818,7 +843,8 @@ export interface IFaustPolyWebAudioDsp extends IFaustBaseWebAudioDsp {
     /**
      * Handle MIDI keyOff messages.
      *
-     * @param channel - the MIDI channel (0..15, not used for now)
+     * @param channel - the MIDI channel (0..15): only a voice started on
+     * this channel with this pitch is released
      * @param pitch - the MIDI pitch value (0..127)
      * @param velocity - the MIDI velocity value (0..127)
      */
@@ -949,6 +975,9 @@ export class FaustBaseWebAudioDsp implements IFaustBaseWebAudioDsp {
         min: number;
         max: number;
     }[][] = new Array(128).fill(null).map(() => []);
+
+    // Received MIDI channel in 1..16, 0 for all channels (see setMidiChannel)
+    protected fMidiChannel = 0;
 
     protected fPathTable: { [address: string]: number } = {};
 
@@ -1691,7 +1720,73 @@ export class FaustBaseWebAudioDsp implements IFaustBaseWebAudioDsp {
         return -1;
     }
 
+    /**
+     * Read the received MIDI channel from the DSP metadata:
+     * `declare options "[midichannel:N]";` or `declare midichannel "N";`.
+     *
+     * Same rules as `MidiMeta::getChannel` in the C++ architecture files: an
+     * invalid value is reported and means all channels.
+     *
+     * @param meta - the `meta` array of the DSP JSON
+     * @returns the channel in 1..16, or 0 for all channels
+     */
+    static parseMidiChannel(meta: FaustDspMeta['meta'] | undefined) {
+        if (!meta) return 0;
+        let value: string | undefined;
+        let source = '';
+        for (const item of meta) {
+            if (typeof item.options === 'string') {
+                const match = item.options.match(/\[midichannel:([^\]]*)\]/);
+                if (match) {
+                    value = match[1];
+                    source = '[midichannel] option';
+                }
+            }
+        }
+        if (value === undefined) {
+            for (const item of meta) {
+                if (typeof item.midichannel === 'string') {
+                    value = item.midichannel;
+                    source = 'midichannel metadata';
+                }
+            }
+        }
+        if (value === undefined || value.trim() === '') return 0;
+        const channel = /^\s*\d+\s*$/.test(value) ? Number(value) : NaN;
+        if (!(channel >= 0 && channel <= 16)) {
+            console.warn(
+                `Faust: invalid MIDI channel '${value}' in ${source}: should be in 1..16, or 0 for all channels`
+            );
+            return 0;
+        }
+        return channel;
+    }
+
+    setMidiChannel(channel: number) {
+        this.fMidiChannel =
+            Number.isInteger(channel) && channel >= 0 && channel <= 16
+                ? channel
+                : 0;
+    }
+
+    getMidiChannel() {
+        return this.fMidiChannel;
+    }
+
+    /**
+     * Whether `midiMessage` receives the channel voice message whose status
+     * byte is `status`. Real-time and SysEx messages (0xF0..0xFF) always are.
+     */
+    protected acceptMidiStatus(status: number) {
+        return (
+            this.fMidiChannel === 0 ||
+            status >= 0xf0 ||
+            (status & 0xf) === this.fMidiChannel - 1
+        );
+    }
+
     midiMessage(data: number[] | Uint8Array) {
+        if (!this.acceptMidiStatus(data[0])) return;
         if (this.fPlotHandler) this.fCachedEvents.push({ data, type: 'midi' });
         const cmd = data[0] >> 4;
         const channel = data[0] & 0xf;
@@ -1932,6 +2027,9 @@ export class FaustMonoWebAudioDsp
 
         // Create JSON object
         this.fJSONDsp = JSON.parse(this.fInstance.json);
+        this.fMidiChannel = FaustBaseWebAudioDsp.parseMidiChannel(
+            this.fJSONDsp.meta
+        );
 
         // Setup GUI
         FaustBaseWebAudioDsp.parseUI(this.fJSONDsp.ui, this.fUICallback);
@@ -2250,6 +2348,8 @@ export class FaustWebAudioDspVoice {
     fCurNote = FaustWebAudioDspVoice.kFreeVoice;
     fNextNote = -1;
     fNextVel = -1;
+    // MIDI channel (0..15) of the current note, of the next one in kLegatoVoice state
+    fChannel = 0;
     fDate = 0;
     fLevel = 0;
 
@@ -2569,6 +2669,9 @@ export class FaustPolyWebAudioDsp
 
         // Create JSON for voice
         this.fJSONDsp = JSON.parse(this.fInstance.voiceJSON);
+        this.fMidiChannel = FaustBaseWebAudioDsp.parseMidiChannel(
+            this.fJSONDsp.meta
+        );
 
         // Create JSON for effect
         this.fJSONEffect =
@@ -2780,11 +2883,14 @@ export class FaustPolyWebAudioDsp
         return voice;
     }
 
-    private getPlayingVoice(pitch: number) {
+    // The same pitch may be played on several channels at once: a note off
+    // releases the voice of its own channel
+    private getPlayingVoice(channel: number, pitch: number) {
         let voicePlaying = FaustWebAudioDspVoice.kNoVoice;
         let oldestDatePlaying = Number.MAX_VALUE;
 
         for (let i = 0; i < this.fInstance.voices; i++) {
+            if (this.fVoiceTable[i].fChannel !== channel) continue;
             const curNote = this.fVoiceTable[i].fCurNote;
             const nextNote = this.fVoiceTable[i].fNextNote;
 
@@ -3084,6 +3190,7 @@ export class FaustPolyWebAudioDsp
     }
 
     midiMessage(data: number[] | Uint8Array) {
+        if (!this.acceptMidiStatus(data[0])) return;
         const cmd = data[0] >> 4;
         const channel = data[0] & 0xf;
         const data1 = data[1];
@@ -3094,11 +3201,33 @@ export class FaustPolyWebAudioDsp
         else super.midiMessage(data);
     }
 
+    // Channel mode messages only end the voices started on their channel, as
+    // in the C++ poly-dsp.h: All Notes Off releases them, All Sound Off mutes
+    // them at once
     ctrlChange(channel: number, ctrl: number, value: number) {
-        if (ctrl === 123 || ctrl === 120) {
-            this.allNotesOff(true);
+        if (ctrl === 123) {
+            this.channelNotesOff(channel, false);
+        } else if (ctrl === 120) {
+            this.channelNotesOff(channel, true);
         } else {
             super.ctrlChange(channel, ctrl, value);
+        }
+    }
+
+    // An indexed loop: reachable from the audio thread, it must not allocate
+    private channelNotesOff(channel: number, hard: boolean) {
+        if (this.fPlotHandler)
+            this.fCachedEvents.push({
+                type: 'ctrlChange',
+                data: [channel, hard ? 120 : 123, 0]
+            });
+        for (let i = 0; i < this.fVoiceTable.length; i++) {
+            const voice = this.fVoiceTable[i];
+            if (
+                voice.fChannel === channel &&
+                voice.fCurNote !== FaustWebAudioDspVoice.kFreeVoice
+            )
+                voice.keyOff(hard);
         }
     }
 
@@ -3109,6 +3238,7 @@ export class FaustPolyWebAudioDsp
                 data: [channel, pitch, velocity]
             });
         const voice = this.getFreeVoice();
+        this.fVoiceTable[voice].fChannel = channel;
         this.fVoiceTable[voice].keyOn(
             pitch,
             velocity,
@@ -3123,7 +3253,7 @@ export class FaustPolyWebAudioDsp
                 type: 'keyOff',
                 data: [channel, pitch, velocity]
             });
-        const voice = this.getPlayingVoice(pitch);
+        const voice = this.getPlayingVoice(channel, pitch);
         if (voice !== FaustWebAudioDspVoice.kNoVoice) {
             this.fVoiceTable[voice].keyOff();
         } else {

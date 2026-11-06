@@ -353,4 +353,52 @@ for (const [kind, sp] of KINDS) {
             `${kind} after all notes off`
         );
     });
+
+    test(`${kind} receives the MIDI channel its metadata gives`, async () => {
+        const { generator, voiceFactory, mixerModule } = await polyGenerator(
+            'nodechannel',
+            'declare options "[midichannel:2]";\n' + INSTRUMENT
+        );
+        const context = audioContext();
+        const node = await generator.createNode(
+            context,
+            VOICES,
+            'nodechannel',
+            voiceFactory,
+            mixerModule,
+            generator.effectFactory,
+            sp,
+            BLOCK
+        );
+        assert.ok(node, 'createNode returned nothing');
+        const releaseFrames = BLOCK * Math.ceil(SAMPLE_RATE / BLOCK);
+        const voices = () => {
+            renderNode(node, BLOCK);
+            return node.getNumActiveVoices();
+        };
+
+        assert.equal(node.getMidiChannel(), 2, `${kind} channel from metadata`);
+        node.midiMessage([0x90, 60, 100]);
+        assert.equal(voices(), 0, `${kind}: a note on channel 1 is ignored`);
+        node.midiMessage([0x91, 60, 100]);
+        assert.equal(voices(), 1, `${kind}: a note on channel 2 plays`);
+        node.midiMessage([0x92, 62, 100]);
+        assert.equal(voices(), 1, `${kind}: a note on channel 3 is ignored`);
+        // A host call, not MIDI input: an on-screen keyboard is not filtered
+        node.keyOn(0, 64, 100);
+        assert.equal(voices(), 2, `${kind}: keyOn is not filtered`);
+
+        // All Sound Off on a channel the node does not receive does nothing
+        node.midiMessage([0xb0, 120, 0]);
+        assert.equal(voices(), 2, `${kind}: CC 120 on channel 1 is ignored`);
+        // On channel 2, it ends the voice of channel 2 only
+        node.midiMessage([0xb1, 120, 0]);
+        assert.equal(voices(), 1, `${kind}: CC 120 ends channel 2's voice`);
+
+        node.setMidiChannel(0);
+        assert.equal(node.getMidiChannel(), 0, `${kind} all channels`);
+        node.midiMessage([0x90, 64, 0]);
+        renderNode(node, releaseFrames);
+        assert.equal(voices(), 0, `${kind}: channel 1 is received again`);
+    });
 }

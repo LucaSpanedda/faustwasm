@@ -37,6 +37,27 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** @type {Mutant[]} */
 const MUTANTS = [
     {
+        what: 'midiMessage receives every channel whatever setMidiChannel says',
+        file: 'src/FaustWebAudioDsp.ts',
+        from: 'this.fMidiChannel === 0 ||\n            status >= 0xf0',
+        to: 'true ||\n            status >= 0xf0',
+        tests: 'test/unit/midi-channel.test.mjs'
+    },
+    {
+        what: 'a note off releases the pitch on any channel',
+        file: 'src/FaustWebAudioDsp.ts',
+        from: 'if (this.fVoiceTable[i].fChannel !== channel) continue;',
+        to: '',
+        tests: 'test/unit/midi-channel.test.mjs'
+    },
+    {
+        what: 'a panic on one channel cancels what is scheduled on all',
+        file: 'src/FaustAudioWorkletProcessor.ts',
+        from: 'if (queue[i].channel !== channel) queue[kept++] = queue[i];',
+        to: 'if (false) queue[kept++] = queue[i];',
+        tests: 'test/unit/midi-channel.test.mjs'
+    },
+    {
         what: 'the three-point interpolator takes the midpoint on the wrong side',
         file: 'src/FaustSensors.ts',
         from: 'return x < this.fMid',

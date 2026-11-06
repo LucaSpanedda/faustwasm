@@ -131,13 +131,23 @@ test('a polyphonic node carries a time on keyOn and keyOff', () => {
     assert.equal(posted(node, () => node.keyOff(0, 60, 0, 7))[0].time, 7);
 });
 
-test('midiMessage passes its time down to the note it decodes', () => {
+test('midiMessage sends the bytes, with their time, in one message', () => {
+    // The processor's DSP decodes them, after applying the received channel
+    // (setMidiChannel): decoded on the main thread, they would skip it.
     const node = monoNode();
-    const [message] = posted(node, () =>
-        node.midiMessage([0x90, 60, 100], 8.5)
-    );
-    assert.equal(message.type, 'keyOn');
-    assert.equal(message.time, 8.5);
+    const messages = posted(node, () => node.midiMessage([0x90, 60, 100], 8.5));
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].type, 'midi');
+    assert.deepEqual([...messages[0].data], [0x90, 60, 100]);
+    assert.equal(messages[0].time, 8.5);
+});
+
+test('a controller or a pitch bend from midiMessage crosses once', () => {
+    // It used to be posted twice, typed and then raw, so the processor
+    // applied every CC and pitch bend twice.
+    const node = monoNode();
+    assert.equal(posted(node, () => node.midiMessage([0xb0, 7, 64])).length, 1);
+    assert.equal(posted(node, () => node.midiMessage([0xe0, 0, 64])).length, 1);
 });
 
 test('a MIDI message with no typed form keeps its time', () => {

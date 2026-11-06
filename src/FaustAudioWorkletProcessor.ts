@@ -115,7 +115,34 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
      * automation first, as the state the block starts from, then sensors, then
      * messages in the order the queue hands them over.
      */
-    type FaustTimedEventSeq = FaustTimedEvent & { seq: number };
+    type FaustTimedEventSeq = FaustTimedEvent & {
+        seq: number;
+        /** MIDI channel (0..15) of a queued MIDI message, -1 for any other message. */
+        channel?: number;
+    };
+
+    /**
+     * The MIDI channel of a port message, as `flushEvents` matches it: the
+     * low nibble of a channel voice status byte for raw bytes, the first datum
+     * of a typed MIDI message, -1 for everything else.
+     */
+    const statusChannel = (status: number) =>
+        status >= 0x80 && status < 0xf0 ? status & 0xf : -1;
+    const messageChannel = (msg: { type: string; data?: any }) => {
+        switch (msg.type) {
+            case 'midi':
+                return statusChannel(msg.data[0]);
+            case 'wam-midi':
+                return statusChannel(msg.data.bytes[0]);
+            case 'ctrlChange':
+            case 'pitchWheel':
+            case 'keyOn':
+            case 'keyOff':
+                return msg.data[0];
+            default:
+                return -1;
+        }
+    };
 
     const kFromAutomation = -2;
     const kFromSensors = -1;
@@ -354,6 +381,7 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
             const event = {
                 frame,
                 seq: this.fEventSeq++,
+                channel: messageChannel(msg as any),
                 apply: () => {
                     try {
                         apply();
@@ -392,11 +420,41 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
         }
 
         /**
+         * Cancel the MIDI messages of one channel scheduled and not yet
+         * performed: what CC 120/123 on that channel asks for.
+         *
+         * All Notes Off and All Sound Off are channel mode messages, and the
+         * polyphonic DSP only ends the voices of their channel: the notes
+         * waiting on other channels, and the control messages, are left alone.
+         *
+         * @param channel - the MIDI channel, 0..15
+         */
+        protected flushChannelEvents(channel: number) {
+            const queue = this.fEventQueue;
+            let kept = 0;
+            for (let i = 0; i < queue.length; i++) {
+                if (queue[i].channel !== channel) queue[kept++] = queue[i];
+            }
+            queue.length = kept;
+            for (const event of this.fBlockEvents) {
+                if (event.seq >= 0 && event.channel === channel)
+                    event.apply = kCancelled;
+            }
+        }
+
+        /** Whether the DSP receives raw MIDI on `channel`, 0..15. */
+        protected acceptsMidiChannel(channel: number) {
+            const received = this.fDSPCode.getMidiChannel();
+            return received === 0 || channel === received - 1;
+        }
+
+        /**
          * Whether a controller number silences the instrument.
          *
          * Exactly the two `FaustPolyWebAudioDsp.ctrlChange` treats as
-         * all-notes-off. Not 121, which resets controllers without ending a
-         * note, and not 122, which is a keyboard's local control.
+         * all-notes-off for their channel. Not 121, which resets controllers
+         * without ending a note, and not 122, which is a keyboard's local
+         * control.
          */
         protected isPanic(ctrl: number) {
             return ctrl === 120 || ctrl === 123;
@@ -541,12 +599,15 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
                 // Generic MIDI message
                 case 'midi': {
                     this.atTime(msg, () => {
-                        // A panic as raw bytes, same as the typed case below
+                        // A panic as raw bytes, same as the typed case below,
+                        // unless the DSP does not receive its channel
+                        const channel = msg.data[0] & 0xf;
                         if (
                             msg.data[0] >> 4 === 11 &&
-                            this.isPanic(msg.data[1])
+                            this.isPanic(msg.data[1]) &&
+                            this.acceptsMidiChannel(channel)
                         )
-                            this.flushEvents();
+                            this.flushChannelEvents(channel);
                         this.midiMessage(msg.data);
                     });
                     break;
@@ -554,9 +615,16 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
                 // Typed MIDI message
                 case 'ctrlChange': {
                     this.atTime(msg, () => {
-                        if (this.isPanic(msg.data[1])) this.flushEvents();
+                        if (this.isPanic(msg.data[1]))
+                            this.flushChannelEvents(msg.data[0]);
                         this.ctrlChange(msg.data[0], msg.data[1], msg.data[2]);
                     });
+                    break;
+                }
+                // Received MIDI channel, applied on arrival like the other
+                // settings of the DSP
+                case 'midiChannel': {
+                    this.fDSPCode.setMidiChannel(msg.data);
                     break;
                 }
                 case 'pitchWheel': {
@@ -799,21 +867,18 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
             this.fDSPCode.start();
         }
 
-        protected midiMessage(data: number[] | Uint8Array) {
-            const cmd = data[0] >> 4;
-            const channel = data[0] & 0xf;
-            const data1 = data[1];
-            const data2 = data[2];
-            if (cmd === 8 || (cmd === 9 && data2 === 0))
-                this.keyOff(channel, data1, data2);
-            else if (cmd === 9) this.keyOn(channel, data1, data2);
-            else super.midiMessage(data);
-        }
-
-        // The base switch already routes 'keyOn' and 'keyOff' through
-        // `this.keyOn` / `this.keyOff`, overridden below. This exists only to
-        // bind `this` for the port listener.
+        // Raw MIDI goes to `FaustPolyWebAudioDsp.midiMessage`, which applies
+        // the received channel before decoding notes. The base switch already
+        // routes 'keyOn' and 'keyOff' through `this.keyOn` / `this.keyOff`,
+        // overridden below.
         protected handleMessageAux = (e: MessageEvent) => {
+            if (e.data.type === 'allNotesOff') {
+                // The host's panic: every voice of every channel, and
+                // everything still scheduled, as in `flushEvents`
+                this.flushEvents();
+                this.allNotesOff(e.data.data);
+                return;
+            }
             super.handleMessageAux(e);
         };
 
