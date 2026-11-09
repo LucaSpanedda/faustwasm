@@ -315,6 +315,27 @@ meter();
 
 With an AudioWorklet node, the voices live on the audio thread: the processor reports their number at the end of each block in which it changed, and the node returns the latest report. ScriptProcessor nodes and offline processors count them directly. It matches `getNumActiveVoices()` of the C++ polyphonic architecture (`faust/dsp/poly-dsp.h`).
 
+### Probes
+
+A bargraph carrying the `[probe]` metadata (whatever its value, e.g. `[probe:scope]`) is a *probe*: a point of the DSP whose signal a host wants to see sample for sample, to draw an oscilloscope or a spectrum of an inner signal without routing it to an output.
+
+```
+probe = _ <: attach(_, hbargraph("osc[probe:scope]", -1, 1));
+process = os.osc(440) : probe : fi.lowpass(2, 800);
+```
+
+A host reads a bargraph once per block, which is enough for a meter but not for a signal. Mono nodes and offline processors have `getProbes()`, the addresses of the probes, and `setProbeHandler(handler)`: while a handler is set, the DSP renders each block one frame at a time and reads the probes after each frame, and the handler receives, once per block, one array per probe in the order of `getProbes()`:
+
+```JavaScript
+const probes = node.getProbes(); // ['/main/osc']
+node.setProbeHandler((blocks, index) => {
+    drawScope(blocks[0]); // every sample of the block, at the probe point
+});
+node.setProbeHandler(null); // back to rendering by block
+```
+
+Probing costs one wasm call per frame instead of one per block, and leaves the audio output unchanged, sample for sample. Without a handler, or without probes, nothing changes. With an AudioWorklet node, the processor posts the blocks to the node, as it does for the plot handler. A polyphonic DSP has no probes.
+
 ### Sample-accurate scheduling
 
 Every control method on a Faust AudioWorklet node takes an optional `time` argument as its last parameter: `setParamValue(path, value, time)`, `keyOn(channel, pitch, velocity, time)`, `keyOff(channel, pitch, velocity, time)`, `midiMessage(data, time)`, `ctrlChange(channel, ctrl, value, time)`, `pitchWheel(channel, wheel, time)`. `time` is in AudioContext seconds — the same clock as `audioCtx.currentTime` and `AudioParam.setValueAtTime` — and the action lands on the exact sample that instant names, inside the audio block that contains it. The unit is the second (a JavaScript double), the granularity is the sample: the processor converts it with `Math.round(time * sampleRate)` to a frame on the audio clock, so an instant is honoured to the nearest sample (about 21 µs at 48 kHz):

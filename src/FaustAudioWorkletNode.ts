@@ -3,6 +3,7 @@ import {
     OutputParamHandler,
     ComputeHandler,
     PlotHandler,
+    ProbeHandler,
     NonFiniteHandler,
     UIHandler,
     MetadataHandler,
@@ -34,6 +35,8 @@ export class FaustAudioWorkletNode<
     protected fInputHandler: InputParamHandler | null;
     protected fComputeHandler: ComputeHandler | null;
     protected fPlotHandler: PlotHandler | null;
+    protected fProbeHandler: ProbeHandler | null;
+    protected fProbeItems: string[];
     protected fNonFiniteHandler: NonFiniteHandler | null;
     protected fUICallback: UIHandler;
     protected fDescriptor: FaustUIInputItem[];
@@ -73,13 +76,22 @@ export class FaustAudioWorkletNode<
         this.fInputHandler = null;
         this.fComputeHandler = null;
         this.fPlotHandler = null;
+        this.fProbeHandler = null;
         this.fNonFiniteHandler = null;
         this.fDescriptor = [];
         this.fParamAliases = {};
 
         // Parse UI
         this.fInputsItems = [];
+        this.fProbeItems = [];
         this.fUICallback = (item: FaustUIItem) => {
+            // Probes, as the processor's DSP finds them
+            if (
+                (item.type === 'hbargraph' || item.type === 'vbargraph') &&
+                item.meta?.some((meta) => 'probe' in meta)
+            ) {
+                this.fProbeItems.push(item.address);
+            }
             if (
                 item.type === 'vslider' ||
                 item.type === 'hslider' ||
@@ -122,6 +134,8 @@ export class FaustAudioWorkletNode<
             this.fInputHandler(e.data.path, e.data.value);
         } else if (e.data.type === 'plot' && this.fPlotHandler) {
             this.fPlotHandler(e.data.value, e.data.index, e.data.events);
+        } else if (e.data.type === 'probe' && this.fProbeHandler) {
+            this.fProbeHandler(e.data.value, e.data.index);
         } else if (e.data.type === 'nonfinite' && this.fNonFiniteHandler) {
             this.fNonFiniteHandler();
         }
@@ -236,6 +250,18 @@ export class FaustAudioWorkletNode<
     }
     getPlotHandler(): PlotHandler | null {
         return this.fPlotHandler;
+    }
+
+    setProbeHandler(handler: ProbeHandler | null) {
+        this.fProbeHandler = handler;
+        // Set ProbeHandler on processor side
+        this.port.postMessage({ type: 'setProbeHandler', data: !!handler });
+    }
+    getProbeHandler(): ProbeHandler | null {
+        return this.fProbeHandler;
+    }
+    getProbes(): string[] {
+        return this.fProbeItems;
     }
 
     setNonFiniteHandler(handler: NonFiniteHandler | null) {
@@ -501,6 +527,8 @@ export class FaustPolyAudioWorkletNode
         if (this.fJSONEffect) {
             FaustBaseWebAudioDsp.parseUI(this.fJSONEffect.ui, this.fUICallback);
         }
+        // Probes are read from one DSP: a polyphonic one has none
+        this.fProbeItems = [];
 
         this.port.addEventListener('message', this.handleActiveVoices);
     }

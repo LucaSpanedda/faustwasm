@@ -27,6 +27,14 @@ export type PlotHandler = (
     index: number,
     events?: { type: string; data: any }[]
 ) => void;
+/**
+ * Receives, once per block, every sample of every probe of the DSP.
+ *
+ * A probe is a bargraph carrying the `[probe]` metadata (whatever its value).
+ * `probes[i]` holds the block of the probe at `getProbes()[i]`, one value per
+ * frame. The arrays are reused from block to block: copy what has to be kept.
+ */
+export type ProbeHandler = (probes: Float32Array[], index: number) => void;
 export type MetadataHandler = (key: string, value: string) => void;
 export type NonFiniteHandler = () => void;
 /** Receives the number of voices still sounding when it changes. */
@@ -552,6 +560,37 @@ export interface IFaustBaseWebAudioDsp {
     getPlotHandler(): PlotHandler | null;
 
     /**
+     * Set the probe handler, to be called in the 'compute' method with the
+     * samples of the probes (see ProbeHandler type).
+     *
+     * A bargraph is written by the DSP on every frame, but read by the host
+     * once per block. While a handler is set and the DSP has probes, 'compute'
+     * renders the block one frame at a time and reads the probes after each
+     * frame, so the handler gets the signal at the probe points sample for
+     * sample. This costs one wasm call per frame instead of one per block,
+     * and leaves the audio output unchanged. Without a handler, or without
+     * probes, nothing changes. Only mono DSPs have probes.
+     *
+     * @param handler - the probe handler
+     */
+    setProbeHandler(handler: ProbeHandler | null): void;
+
+    /**
+     * Get the probe handler.
+     *
+     * @return the current probe handler
+     */
+    getProbeHandler(): ProbeHandler | null;
+
+    /**
+     * Return the addresses of the probes, in the order of the arrays given to
+     * the probe handler: the bargraphs carrying the `[probe]` metadata.
+     *
+     * @return an array of addresses, empty for a polyphonic DSP
+     */
+    getProbes(): string[];
+
+    /**
      * Set the non-finite handler, and with it the non-finite guard: while a
      * handler is set, 'compute' replaces every NaN or infinite output sample with
      * 0, so nothing after the DSP is poisoned and no full-scale click reaches the
@@ -901,6 +940,13 @@ export class FaustBaseWebAudioDsp implements IFaustBaseWebAudioDsp {
     protected fCachedEvents: { type: string; data: any }[] = [];
     protected fBufferNum = 0;
 
+    // Probes: bargraphs read on every frame while a probe handler is set
+    protected fProbeHandler: ProbeHandler | null = null;
+    protected fProbeItems: string[] = [];
+    protected fProbeIndexes: number[] = [];
+    protected fProbeBuffers: Float32Array[] = [];
+    protected fProbeNum = 0;
+
     protected fInChannels: Float32Array[] | Float64Array[] = [];
     protected fOutChannels: Float32Array[] | Float64Array[] = [];
 
@@ -1013,6 +1059,10 @@ export class FaustBaseWebAudioDsp implements IFaustBaseWebAudioDsp {
             };
             // Keep bargraph adresses
             this.fOutputsItems.push(item.address);
+            if (item.meta?.some((meta) => 'probe' in meta)) {
+                this.fProbeItems.push(item.address);
+                this.fProbeIndexes.push(item.index);
+            }
             registerPath(item.address);
             registerPath(item.shortname);
             registerPath(item.label);
@@ -1666,6 +1716,30 @@ export class FaustBaseWebAudioDsp implements IFaustBaseWebAudioDsp {
         return this.fPlotHandler;
     }
 
+    setProbeHandler(handler: ProbeHandler | null) {
+        this.fProbeHandler = handler;
+        // Allocated here, not in 'compute', which runs on the audio thread
+        if (
+            handler &&
+            this.fProbeBuffers.length !== this.fProbeIndexes.length
+        ) {
+            this.fProbeBuffers = this.fProbeIndexes.map(
+                () => new Float32Array(this.fBufferSize)
+            );
+        }
+    }
+    getProbeHandler() {
+        return this.fProbeHandler;
+    }
+    getProbes() {
+        return this.fProbeItems;
+    }
+
+    /** Whether 'compute' has to render frame by frame and report the probes. */
+    protected get probing() {
+        return this.fProbeHandler !== null && this.fProbeIndexes.length > 0;
+    }
+
     setNonFiniteHandler(handler: NonFiniteHandler | null) {
         this.fNonFiniteHandler = handler;
     }
@@ -2014,6 +2088,24 @@ export class FaustMonoWebAudioDsp
         );
     };
 
+    /**
+     * Render one slice frame by frame, reading the probes after each frame,
+     * for `renderBlock` while probing. A field for the same reason as
+     * `fRenderSlice`.
+     */
+    private fRenderSliceProbed = (offset: number, count: number) => {
+        for (let frame = offset; frame < offset + count; frame++) {
+            this.fRenderSlice(frame, 1);
+            for (let probe = 0; probe < this.fProbeIndexes.length; probe++) {
+                this.fProbeBuffers[probe][frame] =
+                    this.fInstance.api.getParamValue(
+                        this.fDSP,
+                        this.fProbeIndexes[probe]
+                    );
+            }
+        }
+    };
+
     constructor(
         instance: FaustMonoDspInstance,
         sampleRate: number,
@@ -2229,14 +2321,21 @@ export class FaustMonoWebAudioDsp
         // Possibly call an externally given callback (for instance to synchronize playing a MIDIFile...)
         if (this.fComputeHandler) this.fComputeHandler(this.fBufferSize);
 
-        // Compute -- in slices around the events, if there are any
-        this.renderBlock(events, this.fRenderSlice);
+        // Compute -- in slices around the events, if there are any, and
+        // frame by frame while probing
+        const probeHandler = this.probing ? this.fProbeHandler : null;
+        this.renderBlock(
+            events,
+            probeHandler ? this.fRenderSliceProbed : this.fRenderSlice
+        );
 
         // Update bargraph
         this.updateOutputs();
 
         // No NaN or Inf leaves the DSP
         this.clearNonFinite();
+
+        if (probeHandler) probeHandler(this.fProbeBuffers, this.fProbeNum++);
 
         let forPlot = this.fOutChannels;
         if (typeof output === 'function') {
@@ -2683,6 +2782,9 @@ export class FaustPolyWebAudioDsp
         FaustBaseWebAudioDsp.parseUI(this.fJSONDsp.ui, this.fUICallback);
         if (this.fJSONEffect)
             FaustBaseWebAudioDsp.parseUI(this.fJSONEffect.ui, this.fUICallback);
+        // Probes are read from one DSP: a polyphonic one has none
+        this.fProbeItems = [];
+        this.fProbeIndexes = [];
 
         // Setup wasm memory
         this.fEndMemory = this.initMemory();

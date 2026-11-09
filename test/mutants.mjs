@@ -217,6 +217,20 @@ const MUTANTS = [
         from: "type: 'setNonFiniteHandler',",
         to: "type: 'setNonFiniteHandlerNot',",
         tests: 'test/unit/nonfinite.test.mjs'
+    },
+    {
+        what: 'probing renders every frame of a slice at its first frame',
+        file: 'src/FaustWebAudioDsp.ts',
+        from: 'this.fRenderSlice(frame, 1);',
+        to: 'this.fRenderSlice(offset, 1);',
+        tests: 'test/unit/probes.test.mjs'
+    },
+    {
+        what: 'a probe value is stored one frame late',
+        file: 'src/FaustWebAudioDsp.ts',
+        from: 'this.fProbeBuffers[probe][frame] =',
+        to: 'this.fProbeBuffers[probe][Math.min(frame + 1, this.fBufferSize - 1)] =',
+        tests: 'test/unit/probes.test.mjs'
     }
 ];
 

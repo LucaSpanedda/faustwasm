@@ -668,6 +668,21 @@ const getFaustAudioWorkletProcessor = <Poly extends boolean = false>(
                     }
                     break;
                 }
+                // Probe handler set on demand
+                case 'setProbeHandler': {
+                    if (msg.data) {
+                        this.fDSPCode.setProbeHandler((probes, index) =>
+                            this.port.postMessage({
+                                type: 'probe',
+                                value: probes,
+                                index
+                            })
+                        );
+                    } else {
+                        this.fDSPCode.setProbeHandler(null);
+                    }
+                    break;
+                }
                 // Non-finite guard set on demand
                 case 'setNonFiniteHandler': {
                     this.fDSPCode.setNonFiniteHandler(
